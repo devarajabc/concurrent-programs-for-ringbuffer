@@ -293,7 +293,7 @@ static const struct timespec req = {.tv_sec = 0, .tv_nsec = 1};
 static uint64_t iterations = 10000;
 #define THRESHOLD (RAND_MAX / 256)
 #define PAD(SIZE) (((size_t)(SIZE) + 7U) & (~7U))
-#define ARRAY_LENGTH 128
+#define ARRAY_LENGTH 128 //configurable
 char* options[] = {"Add tree", "Add node", "Delete tree", "Delete node"};
 
 static void *producer_main(void *arg)
@@ -464,14 +464,14 @@ static void test_shared()
     const char *name = "/ringbuf_shm_test";
     if (pid == 0) { /* child process */
         ringbuf_shm_t ringbuf_shm;
-        assert(ringbuf_shm_init(&ringbuf_shm, name, 1024, true) == 0);
+        assert(ringbuf_shm_init(&ringbuf_shm, name, ARRAY_LENGTH*8, true) == 0);
 
         consumer_main(ringbuf_shm.ringbuf);
 
         ringbuf_shm_deinit(&ringbuf_shm);
     } else { /* parent process */
         ringbuf_shm_t ringbuf_shm;
-        assert(ringbuf_shm_init(&ringbuf_shm, name, 1024, true) == 0);
+        assert(ringbuf_shm_init(&ringbuf_shm, name, ARRAY_LENGTH*8, true) == 0);
 
         producer_main(ringbuf_shm.ringbuf);
 
