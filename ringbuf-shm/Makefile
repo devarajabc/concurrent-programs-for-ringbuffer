@@ -1,8 +1,12 @@
+CFLAGS = -Wall -std=gnu11 -fsanitize=address,undefined
+LDFLAGS = -fsanitize=address,undefined -lpthread -lrt
+
 all:
-	$(CC) -Wall -std=gnu11 -o ringbuffer ringbuffer.c -lpthread -lrt
+	$(CC) $(CFLAGS) -o ringbuffer ringbuffer.c $(LDFLAGS)
 
 clean:
 	rm -f ringbuffer
 
 indent:
 	clang-format -i ringbuffer.c
+
