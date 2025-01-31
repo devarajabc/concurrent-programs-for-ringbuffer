@@ -11,18 +11,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include "ringbuffer.h"
 
 #define RINGBUF_PAD(SIZE) (((size_t)(SIZE) + 7U) & (~7U))
-
-typedef struct {
-    uint32_t size, gap;
-} ringbuf_element_t;
-
-typedef struct record_item{
-    const char* op_name;
-    uint64_t Memory_usage;
-    uint64_t op_time;
-}record_item;
 
 uint64_t get_time()
 {
@@ -31,13 +22,35 @@ uint64_t get_time()
     return (uint64_t)(ts.tv_sec * 1e6 + ts.tv_nsec / 1e3);
 }
 
-typedef struct {
-    size_t size, mask, rsvd /* reserved */, gapd;
-    memory_order acquire, release;
-    atomic_size_t head, tail;
-    uint8_t buf[] __attribute__((aligned(sizeof(ringbuf_element_t))));
-} ringbuf_t;
-
+int shared_array_init(s_array_t* s_array, const char *name, size_t size)
+{
+    strcpy(s_array->name, name);
+    if (! s_array->name)
+        return -1;
+    s_array->init_le_ma = false;
+    s_array->fd = shm_open(s_array->name, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+    if (s_array->fd = -1){
+        s_array->init_le_ma = true;
+        s_array->fd = shm_open(s_array->name, O_RDWR, S_IRUSR | S_IWUSR);
+    }
+    if (s_array->fd == -1) {
+        free(s_array->name);
+        return -1;
+    }
+    if ((ftruncate(s_array->fd, size) == -1) ||
+        ((s_array->shared_array = mmap(NULL, size, PROT_READ | PROT_WRITE,
+                                      MAP_SHARED, s_array->fd, 0)) == MAP_FAILED)) {
+        shm_unlink(s_array->name);
+        close(s_array->fd);
+        free(s_array->name);
+        return -1;
+    }
+    if (!s_array->init_le_ma){
+        s_array->index = 0;
+        pthread_mutex_init(&s_array->lock, NULL);
+    }
+    return 0; 
+}
 
 static inline size_t ringbuf_body_size(size_t minimum)
 {
@@ -288,122 +301,7 @@ static inline void ringbuf_read_advance(ringbuf_t *ringbuf)
 
 /* Test program */
 
-static const struct timespec req = {.tv_sec = 0, .tv_nsec = 1};
 
-static uint64_t iterations = 10000;
-#define THRESHOLD (RAND_MAX / 256)
-#define PAD(SIZE) (((size_t)(SIZE) + 7U) & (~7U))
-#define ARRAY_LENGTH 128 //configurable
-char* options[] = {"Add tree", "Add node", "Delete tree", "Delete node"};
-
-static void *producer_main(void *arg)
-{
-    ringbuf_t *ringbuf = arg;
-    int shm_fd;
-    record_item *shared_array;
-    shm_fd = shm_open("/shm_array", O_CREAT | O_RDWR, 0666);
-    if (shm_fd == -1) {
-        perror("shm_open failed");
-        exit(1);
-    }
-    if (ftruncate(shm_fd, sizeof(record_item) * ARRAY_LENGTH) == -1) {
-        perror("ftruncate failed");
-        shm_unlink("/shm_array");
-        exit(1);
-    }
-    shared_array = mmap(NULL, sizeof(record_item) * ARRAY_LENGTH, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (shared_array == MAP_FAILED) {
-        perror("mmap failed");
-        shm_unlink("/shm_array");
-        exit(1);
-    }
-    
-    uint64_t cnt = 0;
-    while (cnt < iterations) {
-        if (rand() < THRESHOLD)
-            nanosleep(&req, NULL);
-        size_t written = PAD(sizeof(uint64_t));
-        size_t maximum;
-        uint64_t *ptr;
-        if ((ptr = ringbuf_write_request_max(ringbuf, written, &maximum))) {
-            *ptr = cnt%ARRAY_LENGTH;
-            //save record_item
-            shared_array[*ptr].op_name = options[rand()%4];
-            shared_array[*ptr].op_time = get_time();
-            shared_array[*ptr].Memory_usage = rand()%500;
-            ringbuf_write_advance(ringbuf, written);
-            cnt++;
-        } /* else: buffer full */
-    }
-
-    return NULL;
-}
-
-static void *consumer_main(void *arg)
-{
-    ringbuf_t *ringbuf = arg;
-    int shm_fd;
-    record_item *shared_array;
-    shm_fd = shm_open("/shm_array", O_RDONLY, 0666);
-    if (shm_fd == -1) {
-        perror("shm_open failed");
-        exit(1);
-    }
-     shared_array = mmap(NULL, sizeof(record_item) * ARRAY_LENGTH, PROT_READ, MAP_SHARED, shm_fd, 0);
-    if (shared_array == MAP_FAILED) {
-        perror("mmap failed");
-        close(shm_fd);
-        exit(1);
-    }
-
-    uint64_t cnt = 0;
-    uint64_t prev = 0;
-    while (cnt < iterations) {
-        if (rand() < THRESHOLD)
-            nanosleep(&req, NULL);
-
-        const uint64_t *ptr;
-        size_t toread;
-        if ((ptr = ringbuf_read_request(ringbuf, &toread))) {
-            if(shared_array[*ptr].op_time < prev){
-                printf("Saving error");
-                munmap(shared_array, sizeof(record_item) * ARRAY_LENGTH);
-                close(shm_fd);
-                shm_unlink("/shm_array");
-                exit(1);
-            }
-            prev = shared_array[*ptr].op_time;
-            printf("Action : %s, op_time : %lld, Memory_usage :%lld \n",shared_array[*ptr].op_name, shared_array[*ptr].op_time, shared_array[*ptr].Memory_usage);
-            ringbuf_read_advance(ringbuf);
-            cnt++;
-        } /* else: buffer empty */
-    }
-   
-    return NULL;
-}
-
-static void test_threaded()
-{
-    pthread_t producer, consumer;
-    ringbuf_t *ringbuf = ringbuf_new(8192, true);
-    assert(ringbuf);
-
-    pthread_create(&consumer, NULL, consumer_main, ringbuf);
-    pthread_create(&producer, NULL, producer_main, ringbuf);
-
-    pthread_join(producer, NULL);
-    pthread_join(consumer, NULL);
-
-    ringbuf_free(ringbuf);
-}
-
-typedef struct _ringbuf_shm_t ringbuf_shm_t;
-
-struct _ringbuf_shm_t {
-    char *name;
-    int fd;
-    ringbuf_t *ringbuf;
-};
 
 static int ringbuf_shm_init(ringbuf_shm_t *ringbuf_shm,
                             const char *name,
@@ -456,26 +354,95 @@ static void ringbuf_shm_deinit(ringbuf_shm_t *ringbuf_shm)
     free(ringbuf_shm->name);
 }
 
+static void *producer_main()
+{
+    //init ringbuffer 
+    ringbuf_shm_t ringbuf_shm;
+    if(ringbuf_shm_init(&ringbuf_shm, "/shm_ring", ARRAY_LENGTH*8, true) != 0){
+        printf ("ringbuf_shm init error\n");
+        exit(1);
+    }
+    //init shared array
+    s_array_t s_array;
+    if(shared_array_init(&s_array, "/shm_array",ARRAY_LENGTH) != 0){
+        printf("array_shm init error \n");
+        exit(1);
+    }
+    uint64_t cnt = 0;
+    while (cnt < iterations) {
+        if (rand() < THRESHOLD)
+            nanosleep(&req, NULL);
+        char Nameee[32];
+        strcpy(Nameee, options[(s_array.index)%4]);
+        uint64_t Sizeee = s_array.index%20;
+        Saving(ringbuf_shm.ringbuf,Nameee,Sizeee,&s_array);
+    }
+    return NULL;
+}
+
+static void *consumer_main()
+{
+    //init ringbuffer 
+    ringbuf_shm_t ringbuf_shm;
+    if(ringbuf_shm_init(&ringbuf_shm, "/shm_ring", ARRAY_LENGTH*8, true) != 0){
+        printf ("ringbuf_shm init error\n");
+        exit(1);
+    }
+    //init shared array
+    s_array_t s_array;
+    if(shared_array_init(&s_array, "/shm_array",ARRAY_LENGTH) != 0){
+        printf("array_shm init error \n");
+        exit(1);
+    }
+    uint64_t cnt = 0;
+    while (cnt < iterations) {
+        if (rand() < THRESHOLD)
+            nanosleep(&req, NULL);
+        Reading(ringbuf_shm.ringbuf, &s_array);
+    }
+    return NULL;
+}
+
+void Saving(ringbuf_t *ringbuf, char *name, uint64_t Size, s_array_t *s_array){
+    size_t written = sizeof(uint64_t);
+    size_t maximum;
+    uint64_t *ptr;
+    if ((ptr = ringbuf_write_request_max(ringbuf, written, &maximum))){
+    pthread_mutex_lock(&s_array->lock);
+    *ptr = s_array->index%ARRAY_LENGTH;
+    //save record_item
+    memcpy(s_array->shared_array[*ptr].op_name, name, strlen(name)+1);
+    s_array->shared_array[*ptr].op_time = get_time();
+    s_array->shared_array[*ptr].Memory_usage = Size;
+    s_array->index += 1;
+    pthread_mutex_unlock(&s_array->lock);
+    ringbuf_write_advance(ringbuf, written);
+    }
+}
+
+void Reading(ringbuf_t *ringbuf, s_array_t *s_array){
+    //while (1){
+    //pthread_mutex_lock(&s_array->lock);
+    const uint64_t *ptr;
+    size_t toread;
+    if ((ptr = ringbuf_read_request(ringbuf, &toread))) {
+        printf("%lld, %lld, %s, %lld, %lld \n",*ptr,s_array->index ,s_array->shared_array[*ptr].op_name, s_array->shared_array[*ptr].op_time, s_array->shared_array[*ptr].Memory_usage);
+        ringbuf_read_advance(ringbuf);  
+    }
+    //pthread_mutex_unlock(&s_array->lock);
+    //}
+} 
+
 static void test_shared()
 {
     pid_t pid = fork();
     assert(pid != -1);
 
-    const char *name = "/ringbuf_shm_test";
+    //const char *name = "/ringbuf_shm_test";
     if (pid == 0) { /* child process */
-        ringbuf_shm_t ringbuf_shm;
-        assert(ringbuf_shm_init(&ringbuf_shm, name, ARRAY_LENGTH*8, true) == 0);
-
-        consumer_main(ringbuf_shm.ringbuf);
-
-        ringbuf_shm_deinit(&ringbuf_shm);
+        consumer_main();
     } else { /* parent process */
-        ringbuf_shm_t ringbuf_shm;
-        assert(ringbuf_shm_init(&ringbuf_shm, name, ARRAY_LENGTH*8, true) == 0);
-
-        producer_main(ringbuf_shm.ringbuf);
-
-        ringbuf_shm_deinit(&ringbuf_shm);
+        producer_main();
     }
 }
 
@@ -485,11 +452,5 @@ int main(int argc, char **argv)
 
     //test_threaded();
     test_shared();
-    int shm_fd;
-    record_item *shared_array;
-    shm_fd = shm_open("/shm_array", O_RDONLY, 0666);
-    munmap(shared_array, sizeof(record_item) * ARRAY_LENGTH);
-    close(shm_fd);
-    shm_unlink("/shm_array");
     return 0;
 }
