@@ -311,7 +311,8 @@ static int ringbuf_shm_init(ringbuf_shm_t *ringbuf_shm,
     const size_t body_size = ringbuf_body_size(minimum);
     const size_t total_size = sizeof(ringbuf_t) + body_size;
 
-    ringbuf_shm->name = strdup(name);
+    //ringbuf_shm->name = strdup(name);
+    strcpy(ringbuf_shm->name, name);
     if (!ringbuf_shm->name)
         return -1;
 
@@ -376,6 +377,7 @@ static void *producer_main()
         strcpy(Nameee, options[(s_array.index)%4]);
         uint64_t Sizeee = s_array.index%20;
         Saving(ringbuf_shm.ringbuf,Nameee,Sizeee,&s_array);
+        cnt ++;
     }
     return NULL;
 }
@@ -399,6 +401,7 @@ static void *consumer_main()
         if (rand() < THRESHOLD)
             nanosleep(&req, NULL);
         Reading(ringbuf_shm.ringbuf, &s_array);
+        cnt ++;
     }
     return NULL;
 }
@@ -415,6 +418,7 @@ void Saving(ringbuf_t *ringbuf, char *name, uint64_t Size, s_array_t *s_array){
     s_array->shared_array[*ptr].op_time = get_time();
     s_array->shared_array[*ptr].Memory_usage = Size;
     s_array->index += 1;
+    printf(" -> %lld \n",s_array->index);
     pthread_mutex_unlock(&s_array->lock);
     ringbuf_write_advance(ringbuf, written);
     }

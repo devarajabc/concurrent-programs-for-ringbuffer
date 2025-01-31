@@ -46,7 +46,7 @@ typedef struct {
 typedef struct _ringbuf_shm_t ringbuf_shm_t;
 
 struct _ringbuf_shm_t {
-    char *name;
+    char name[32];
     int fd;
     ringbuf_t *ringbuf;
 };
