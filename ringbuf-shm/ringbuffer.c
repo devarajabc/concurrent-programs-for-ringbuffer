@@ -325,14 +325,12 @@ static void *producer_main(void *arg)
             assert(maximum >= written);
             const uint8_t *end = ptr + written;
             for (uint8_t *src = ptr; src < end; src += sizeof(uint64_t)) {
-                *(uint64_t *) src = ((ringbuf->head)/16)%512;
-                //assert(*(uint64_t *) src == cnt);PAD(rand() * 1024.f / RAND_MAX);
-                //printf("tid = %lld index = %lld\n",tid,  *(uint64_t *) src);
-                //pthread_mutex_lock(&s_array.lock);
+                *(uint64_t *) src = s_array.index%170;
                 s_array.shared_array[*(uint64_t *) src ].op_time = *(uint64_t *) src;
                 s_array.shared_array[*(uint64_t *) src ].Memory_usage = cnt;
+                pthread_mutex_lock(&s_array.lock);
                 s_array.index += 1;
-                //pthread_mutex_unlock(&s_array.lock);
+                pthread_mutex_unlock(&s_array.lock);
             }
             ringbuf_write_advance(ringbuf, written);
             cnt++;
@@ -357,9 +355,8 @@ static void *consumer_main(void *arg)
             const uint8_t *end = ptr + toread;
             for (const uint8_t *src = ptr; src < end; src += sizeof(uint64_t)){
                 //printf("S %lld C %lld\n",*(const uint64_t *) src, cnt);
-                //assert(*(const uint64_t *) src == cnt);
-                printf("%lld, %lld, %lld \n",s_array.index, s_array.shared_array[*(const uint64_t *) src].op_time, s_array.shared_array[*(const uint64_t *) src].Memory_usage);
-                
+                printf("%lld, s %lld, c %lld \n",s_array.index -1 , s_array.shared_array[*(const uint64_t *) src].op_time, s_array.shared_array[*(const uint64_t *) src].Memory_usage);
+                assert(*(const uint64_t *) src == cnt%170);
             }
             ringbuf_read_advance(ringbuf);
             cnt++;
@@ -376,7 +373,7 @@ static void test_threaded()
     assert(ringbuf);
     //s_array_t s_array;const char *name2 = "/array_shm";
     const char *name2 = "/array_shm";
-    assert(shared_array_init(&s_array, name2, 512) == 0);
+    assert(shared_array_init(&s_array, name2, 8192) == 0);
 
     pthread_create(&consumer, NULL, consumer_main, ringbuf);
     pthread_create(&producer, NULL, producer_main, ringbuf);
