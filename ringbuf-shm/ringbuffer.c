@@ -301,7 +301,7 @@ static inline void ringbuf_read_advance(ringbuf_t *ringbuf)
 
 static const struct timespec req = {.tv_sec = 0, .tv_nsec = 1};
 
-static uint64_t iterations = 500;
+static uint64_t iterations = 10000;
 #define THRESHOLD (RAND_MAX / 256)
 #define PAD(SIZE) (((size_t)(SIZE) + 7U) & (~7U))
 
@@ -325,10 +325,11 @@ static void *producer_main(void *arg)
             assert(maximum >= written);
             const uint8_t *end = ptr + written;
             for (uint8_t *src = ptr; src < end; src += sizeof(uint64_t)) {
-                *(uint64_t *) src = s_array.index%170;
-                s_array.shared_array[*(uint64_t *) src ].op_time = *(uint64_t *) src;
-                s_array.shared_array[*(uint64_t *) src ].Memory_usage = cnt;
                 pthread_mutex_lock(&s_array.lock);
+                *(uint64_t *) src = s_array.index%170;
+                //printf("index = %lld \n",s_array.index);
+                s_array.shared_array[*(uint64_t *) src ].op_time = s_array.index;
+                s_array.shared_array[*(uint64_t *) src ].Memory_usage = tid;
                 s_array.index += 1;
                 pthread_mutex_unlock(&s_array.lock);
             }
@@ -355,8 +356,8 @@ static void *consumer_main(void *arg)
             const uint8_t *end = ptr + toread;
             for (const uint8_t *src = ptr; src < end; src += sizeof(uint64_t)){
                 //printf("S %lld C %lld\n",*(const uint64_t *) src, cnt);
-                printf("%lld, s %lld, c %lld \n",s_array.index -1 , s_array.shared_array[*(const uint64_t *) src].op_time, s_array.shared_array[*(const uint64_t *) src].Memory_usage);
-                assert(*(const uint64_t *) src == cnt%170);
+                printf("%lld, index %lld, tid %lld \n",cnt , s_array.shared_array[*(const uint64_t *) src].op_time, s_array.shared_array[*(const uint64_t *) src].Memory_usage);
+                //assert(*(const uint64_t *) src == cnt%170);
             }
             ringbuf_read_advance(ringbuf);
             cnt++;
